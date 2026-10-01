@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>ДПС Патруль</title>
+<style>
+*{box-sizing:border-box;margin:0;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+body{background:#0b0f19;color:#e8ecf4;font:600 14px system-ui,sans-serif;display:flex;justify-content:center;height:100vh;overflow:hidden}
+#app{position:relative;display:flex;flex-direction:column;align-items:center;padding:6px;max-width:100%}
+#hud{width:100%;display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:6px}
+.card{background:#151c2c;border:1px solid #26314a;border-radius:10px;padding:5px 9px;grid-column:span 2}
+.card.w{grid-column:span 3}
+.card small{display:block;color:#7f8db0;font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.card b{font-size:17px}
+.bar{height:8px;background:#0b0f19;border-radius:4px;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;width:50%;transition:width .2s}
+#c{border-radius:12px;border:2px solid #26314a;max-height:calc(100vh - 175px);max-width:100%}
+#ov{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,8,15,.72);backdrop-filter:blur(3px);z-index:5}
+#box{background:#151c2c;border:1px solid #33425f;border-radius:16px;padding:20px;width:min(360px,92%);text-align:center;line-height:1.5}
+#box h2{font-size:22px;margin-bottom:8px}
+#box p{color:#aab5d0;font-weight:500;margin-bottom:10px;font-size:13px}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #26314a;font-size:13px}
+.bad{color:#ff5d5d}.ok{color:#4cd98a}
+button{background:#2b6cff;color:#fff;border:0;border-radius:10px;padding:10px 14px;font:700 14px inherit;cursor:pointer;margin:4px}
+button.r{background:#e5484d}button.y{background:#e3a008}button.g{background:#2f9e63}button.n{background:#3a4660}
+#tc{display:none;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}
+#tc button{min-width:54px;padding:12px}
+#help{color:#7f8db0;font-size:11px;margin-top:5px;text-align:center}
+</style></head><body>
+<div id="app">
+ <div id="hud">
+  <div class="card"><small>Очки</small><b id="sc">0</b></div>
+  <div class="card"><small>Бюджет ₽</small><b id="mo">0</b></div>
+  <div class="card"><small>Смена</small><b id="tm">3:00</b></div>
+  <div class="card w"><small>Уважение</small><div class="bar"><i id="rb" style="background:#4cd98a"></i></div></div>
+  <div class="card w"><small>Тревога в городе</small><div class="bar"><i id="ab" style="background:#ff5d5d"></i></div></div>
+ </div>
+ <canvas id="c" width="480" height="720"></canvas>
+ <div id="tc">
+  <button data-k="ArrowLeft">◀</button><button data-k="ArrowRight">▶</button>
+  <button data-k="ArrowUp">▲</button><button data-k="ArrowDown">▼</button>
+  <button class="r" id="bs">🚨</button><button class="g" id="be">E</button>
+ </div>
+ <div id="help">←/→ или A/D — руль · W/S — газ/тормоз · ПРОБЕЛ — сирена и остановка · E — проверка</div>
+ <div id="ov"><div id="box"></div></div>
+</div>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d'),W=480,H=720,RL=60,RR=420,LW=90,LIM=90;
+const $=id=>document.getElementById(id),keys={};
+const R=(a,b)=>a+Math.random()*(b-a),pick=a=>a[Math.random()*a.length|0];
+const COLS=['#c0392b','#2980b9','#27ae60','#8e44ad','#d35400','#7f8c8d','#f1c40f','#16a085','#2c3e50'];
+const NAMES=['Иванов И.','Петров С.','Сидорова А.','Козлов Д.','Морозов В.','Волкова Е.','Орлов Н.','Смирнов К.'];
+const L='АВЕКМНОРСТУХ',plate=()=>pick(L)+(100+Math.random()*899|0)+pick(L)+pick(L)+' '+pick(['77','78','50','99','16']);
+let S,last=0,uid=0;
+function reset(){S={run:false,pause:false,score:0,money:0,resp:60,alarm:0,time:180,P:100,px:RL+LW*1.5,py:560,cars:[],spawn:0,sirenT:0,cd:0,shake:0,msgs:[],t:0,off:0,fines:0,arr:0,warn:0}}
+function msg(t,c='#fff'){S.msgs.push({t,c,l:2.8});if(S.msgs.length>3)S.msgs.shift()}
+function spawn(){
+ const lane=Math.random()*4|0,spd=Math.random()<.3?R(92,155):R(50,92),y=spd>S.P?H+90:-90,x=RL+LW*(lane+.5);
+ if(S.cars.some(c=>Math.abs(c.x-x)<40&&Math.abs(c.y-y)<150))return;
+ const wanted=Math.random()<.05,drunk=Math.random()<.07,exp=Math.random()<.12,over=spd-LIM;
+ const level=(wanted||drunk)?3:(exp||over>=20)?2:over>0?1:0;
+ S.cars.push({id:uid++,x,y,tx:x,bx:x,v:spd,spd,st:'drive',col:pick(COLS),wanted,drunk,exp,level,over,age:0,hold:0,name:pick(NAMES),plate:plate()});
+}
+function siren(){
+ if(!S||!S.run||S.pause)return;
+ S.sirenT=4;
+ let best=null;
+ for(const c of S.cars)if(c.st==='drive'&&c.y<S.py-20&&c.y>S.py-340&&Math.abs(c.x-S.px)<55&&(!best||c.y>best.y))best=c;
+ if(!best){msg('Впереди нет цели','#aab5d0');return}
+ if(best.wanted||(best.level>=2&&Math.random()<.15)){best.st='flee';best.bx=best.x;msg('Нарушитель уходит от погони! Газуй (W)!','#ffb300')}
+ else{best.st='pull';best.tx=RR+30;msg('Машина прижимается к обочине','#6cb2ff')}
+}
+function inspect(){
+ if(!S||!S.run||S.pause)return;
+ const c=S.cars.find(c=>c.st==='stopped'&&!c.done&&Math.abs(c.x-S.px)<110&&Math.abs(c.y-S.py)<100);
+ if(!c){msg('Подъедите к остановленной машине','#aab5d0');return}
+ if(S.P>70){msg('Сбросьте скорость до 70 км/ч','#aab5d0');return}
+ S.pause=true;S.cur=c;
+ const row=(a,b,bad)=>`<div class="row"><span>${a}</span><span class="${bad?'bad':'ok'}">${b}</span></div>`;
+ show(`<h2>🚔 Проверка</h2><p>${c.name} · ${c.plate}</p>`+
+  row('Скорость',Math.round(c.spd)+' км/ч (лимит '+LIM+')',c.over>0)+
+  row('Документы',c.exp?'просрочены':'в порядке',c.exp)+
+  row('Алкотестер',c.drunk?'ПЬЯН':'трезв',c.drunk)+
+  row('База розыска',c.wanted?'В РОЗЫСКЕ':'чисто',c.wanted)+
+  `<p style="margin-top:10px">Ваше решение:</p>
+  <button class="n" onclick="decide(0)">Отпустить</button><button class="y" onclick="decide(1)">Предупредить</button>
+  <button onclick="decide(2)">Штраф</button><button class="r" onclick="decide(3)">Задержать</button>`);
+}
+function decide(n){
+ const c=S.cur,lv=c.level;let m;
+ if(n===lv){
+  S.score+=[20,60,120,300][n];S.resp+=[1,3,5,10][n];
+  if(n===1){S.warn++;m='Предупреждение: верное решение'}
+  if(n===2){const f=50+Math.max(0,c.over)*5|0;S.money+=f;S.fines++;m='Штраф '+f+' ₽ выписан'}
+  if(n===3){S.money+=150;S.arr++;m='Задержание: +150 ₽'}
+  if(n===0)m='Водитель чист — отпущен';
+  if(lv>=2)S.alarm=Math.max(0,S.alarm-15);
+  msg(m,'#4cd98a');
+ }else if(n>lv){S.resp-=n===3?15:6;S.score-=30;if(n>=2)S.money-=80;msg('Необоснованное наказание! Жалоба водителя','#ff5d5d')}
+ else{S.resp-=2;S.score+=10;S.alarm+=n===0?10:4;msg('Слишком мягко — нарушитель остался безнаказанным','#ffb300')}
+ S.resp=Math.max(0,Math.min(100,S.resp));
+ c.done=true;if(n===3)c.dead=true;else{c.st='drive';c.v=80;c.tx=RL+LW*(Math.random()*4|0)+LW/2}
+ S.cur=null;S.pause=false;hide();
+}
+function show(h){$('box').innerHTML=h;$('ov').style.display='flex'}
+function hide(){$('ov').style.display='none'}
+function start(){reset();S.run=true;hide()}
+function end(why){
+ S.run=false;S.pause=true;
+ const r=S.score>1500?'Генерал-лейтенант 🎖️':S.score>900?'Майор':S.score>400?'Старший лейтенант':'Стажёр';
+ show(`<h2>${why}</h2><p>Звание по итогам смены: <b>${r}</b></p>`+
+ `<div class="row"><span>Очки</span><b>${S.score}</b></div><div class="row"><span>Бюджет</span><b>${S.money} ₽</b></div>`+
+ `<div class="row"><span>Штрафов</span><b>${S.fines}</b></div><div class="row"><span>Задержаний</span><b>${S.arr}</b></div>`+
+ `<div class="row"><span>Предупреждений</span><b>${S.warn}</b></div><button onclick="start()">Новая смена</button>`);
+}
+function update(dt){
+ S.t+=dt;S.time-=dt;S.off+=S.P*2.2*dt;
+ if(S.cd>0)S.cd-=dt;if(S.sirenT>0)S.sirenT-=dt;if(S.shake>0)S.shake-=dt;
+ const k=keys;
+ if(k.KeyA||k.ArrowLeft)S.px-=250*dt;if(k.KeyD||k.ArrowRight)S.px+=250*dt;
+ if(k.KeyW||k.ArrowUp)S.P+=55*dt;else if(k.KeyS||k.ArrowDown)S.P-=90*dt;else S.P+=(100-S.P)*.15*dt;
+ S.P=Math.max(20,Math.min(190,S.P));S.px=Math.max(RL+20,Math.min(RR+50,S.px));
+ S.spawn-=dt;if(S.spawn<=0){spawn();S.spawn=R(.7,1.4)}
+ for(const c of S.cars){
+  c.y+=(S.P-c.v)*2.2*dt;
+  if(c.st==='drive'){
+   c.x+=(c.tx-c.x)*Math.min(1,dt*4);
+   for(const o of S.cars)if(o!==c&&o.st==='drive'&&Math.abs(o.x-c.x)<30&&o.y<c.y&&c.y-o.y<90&&c.v>o.v)c.v=o.v;
+  }else if(c.st==='pull'){
+   c.x+=(c.tx-c.x)*Math.min(1,dt*2.5);c.v=Math.max(0,c.v-45*dt);
+   if(c.v===0&&Math.abs(c.x-c.tx)<4)c.st='stopped';
+  }else if(c.st==='flee'){
+   c.age+=dt;c.v=135;c.x=Math.max(RL+20,Math.min(RR-20,c.bx+Math.sin(S.t*2.5+c.id)*70));
+   if(Math.abs(c.y-S.py)<75&&Math.abs(c.x-S.px)<38){c.hold+=dt;
+    if(c.hold>.8){S.score+=300;S.resp=Math.min(100,S.resp+10);S.money+=150;S.arr++;S.alarm=Math.max(0,S.alarm-20);msg('Погоня успешна! Нарушитель задержан','#4cd98a');c.dead=true}
+   }else c.hold=0;
+   if(c.age>20&&!c.dead){c.v=200}
+  }
+  if(c.st!=='flee'&&S.cd<=0&&Math.abs(c.x-S.px)<31&&Math.abs(c.y-S.py)<57){
+   S.cd=1.2;S.P=Math.max(30,S.P*.5);S.resp=Math.max(0,S.resp-3);S.shake=.4;S.px+=(S.px>c.x?14:-14);msg('Столкновение! −3 уважения','#ff5d5d');
+  }
+ }
+ S.cars=S.cars.filter(c=>{
+  if(c.dead)return false;
+  if(c.y>H+130||c.y<-170){
+   if(c.st==='flee'){S.alarm+=15;S.resp=Math.max(0,S.resp-5);msg('Нарушитель скрылся!','#ff5d5d')}
+   else if(c.st==='drive'&&!c.done&&c.level>=2)S.alarm+=7;
+   else if((c.st==='stopped'||c.st==='pull')&&!c.done){S.resp=Math.max(0,S.resp-2);msg('Остановленную машину бросили без проверки','#ffb300')}
+   return false;
+  }return true;
+ });
+ S.msgs.forEach(m=>m.l-=dt);S.msgs=S.msgs.filter(m=>m.l>0);
+ S.alarm=Math.max(0,S.alarm-.6*dt);
+ if(S.resp<=0)end('Вас уволили: уважение упало до нуля');
+ else if(S.alarm>=100)end('Город погряз в хаосе');
+ else if(S.time<=0)end('Смена окончена');
+}
+function car(x,y,col,o={}){
+ g.save();g.translate(x,y);
+ g.fillStyle='rgba(0,0,0,.35)';g.beginPath();g.roundRect(-15,-26,36,62,7);g.fill();
+ g.fillStyle=col;g.beginPath();g.roundRect(-17,-30,34,60,7);g.fill();
+ g.fillStyle='#10151f';g.beginPath();g.roundRect(-13,-19,26,12,3);g.fill();g.beginPath();g.roundRect(-13,9,26,10,3);g.fill();
+ g.fillStyle='#ffeeb0';g.fillRect(-14,-30,7,3);g.fillRect(7,-30,7,3);
+ g.fillStyle='#ff3b30';g.fillRect(-14,27,7,3);g.fillRect(7,27,7,3);
+ if(o.cop){g.fillStyle='#1d4ed8';g.fillRect(-17,-3,34,7);
+  const f=S.sirenT>0&&(S.t*8|0)%2;g.fillStyle=f?'#ff2a2a':'#6a1a1a';g.fillRect(-9,-8,9,5);g.fillStyle=f?'#1a2a6a':'#3b82ff';g.fillRect(0,-8,9,5);}
+ if(o.haz&&(S.t*3|0)%2){g.fillStyle='#ffb300';g.fillRect(-19,-28,4,6);g.fillRect(15,-28,4,6);g.fillRect(-19,22,4,6);g.fillRect(15,22,4,6)}
+ g.restore();
+}
+function draw(){
+ g.save();
+ if(S.shake>0)g.translate(R(-4,4),R(-4,4));
+ g.fillStyle='#1f4d2b';g.fillRect(0,0,W,H);
+ g.fillStyle='#2a2d34';g.fillRect(RL,0,RR-RL,H);
+ g.fillStyle='#363a42';g.fillRect(RR,0,W-RR,H);
+ g.fillStyle='#fff';g.fillRect(RL-3,0,3,H);g.fillStyle='#e3a008';g.fillRect(RR,0,3,H);
+ const o=S.off%80;
+ g.fillStyle='rgba(255,255,255,.7)';
+ for(let i=1;i<4;i++)for(let y=-80+o;y<H;y+=80)g.fillRect(RL+LW*i-2,y,4,40);
+ g.fillStyle='#3d3226';for(let y=-120+(S.off%120);y<H;y+=120)g.fillRect(14,y,8,8);
+ for(const c of S.cars){
+  car(c.x,c.y,c.col,{haz:c.st==='stopped'||c.st==='pull'});
+  if(c.y<S.py+60&&c.y>S.py-380&&c.st!=='stopped'){
+   const t=Math.round(c.spd)+'';g.font='bold 12px system-ui';g.textAlign='center';
+   g.fillStyle='rgba(0,0,0,.65)';g.fillRect(c.x-19,c.y-48,38,16);
+   g.fillStyle=c.spd>LIM?'#ff5d5d':'#4cd98a';g.fillText(t,c.x,c.y-36);
+  }
+  if(c.st==='flee'){g.fillStyle='#ff3b30';g.font='bold 12px system-ui';g.fillText('ПОГОНЯ',c.x,c.y-52)}
+  if(c.st==='stopped'&&!c.done){
+   const near=Math.abs(c.x-S.px)<110&&Math.abs(c.y-S.py)<100;
+   g.font='bold 12px system-ui';g.textAlign='center';g.fillStyle=near?'#4cd98a':'#ffb300';
+   g.fillText(near?(S.P>70?'Тормозите!':'E — проверить'):'СТОП',c.x-10,c.y-40);
+  }
+ }
+ if(S.sirenT>0){const f=(S.t*8|0)%2;g.fillStyle=f?'rgba(255,40,40,.14)':'rgba(40,90,255,.14)';g.beginPath();g.arc(S.px,S.py,110,0,7);g.fill()}
+ car(S.px,S.py,'#f4f6fa',{cop:true});
+ g.textAlign='left';g.fillStyle='rgba(0,0,0,.6)';g.fillRect(8,H-58,110,50);
+ g.fillStyle='#fff';g.font='bold 24px system-ui';g.fillText(Math.round(S.P),16,H-28);
+ g.font='11px system-ui';g.fillStyle='#aab5d0';g.fillText('км/ч · лимит '+LIM,16,H-14);
+ g.textAlign='center';
+ S.msgs.forEach((m,i)=>{g.globalAlpha=Math.min(1,m.l);g.font='bold 14px system-ui';const w=g.measureText(m.t).width+20;
+  g.fillStyle='rgba(10,14,24,.85)';g.fillRect(W/2-w/2,12+i*28,w,24);g.fillStyle=m.c;g.fillText(m.t,W/2,29+i*28);g.globalAlpha=1});
+ g.restore();
+}
+function hud(){
+ $('sc').textContent=S.score;$('mo').textContent=S.money;
+ const t=Math.max(0,S.time|0);$('tm').textContent=(t/60|0)+':'+String(t%60).padStart(2,'0');
+ $('rb').style.width=S.resp+'%';$('ab').style.width=Math.min(100,S.alarm)+'%';
+}
+function loop(ts){
+ const dt=Math.min(.05,(ts-last)/1000||0);last=ts;
+ if(S.run&&!S.pause)update(dt);
+ draw();hud();requestAnimationFrame(loop);
+}
+addEventListener('keydown',e=>{keys[e.code]=true;
+ if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
+ if(e.code==='Space')siren();if(e.code==='KeyE')inspect()});
+addEventListener('keyup',e=>keys[e.code]=false);
+document.querySelectorAll('#tc [data-k]').forEach(b=>{
+ const k=b.dataset.k;
+ b.onpointerdown=e=>{e.preventDefault();keys[k]=true};
+ b.onpointerup=b.onpointerleave=()=>keys[k]=false;
+});
+$('bs').onclick=siren;$('be').onclick=inspect;
+if('ontouchstart' in window)$('tc').style.display='flex';
+reset();
+show(`<h2>🚔 ДПС Патруль</h2><p>Смена — 3 минуты. Следите за скоростью машин (красная — превышение), включайте сирену <b>(ПРОБЕЛ)</b>, проверяйте остановленные машины <b>(E)</b> и принимайте верное решение: отпустить, предупредить, оштрафовать или задержать. Не наказывайте невиновных, не пропускайте опасных нарушителей и ловите беглецов на скорости!</p><button onclick="start()">Начать смену</button>`);
+requestAnimationFrame(loop);
+</script></body></html>
